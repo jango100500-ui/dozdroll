@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fly REROLL — connectome learning experiment</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#07090d;color:#e8edf5;font:14px system-ui}
+#hud{position:fixed;inset:16px 16px auto 16px;z-index:3;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.card{background:#10151dcc;border:1px solid #263044;border-radius:12px;padding:9px 12px;backdrop-filter:blur(8px)}
+#status{color:#8fe0a8} #warn{color:#ffcc7a}
+#log{position:fixed;right:16px;bottom:16px;width:min(420px,calc(100vw - 32px));max-height:30vh;overflow:auto;z-index:3;background:#0d1118dd;border:1px solid #263044;border-radius:12px;padding:10px;font:12px ui-monospace}
+#start{cursor:pointer;border:0;border-radius:10px;padding:10px 16px;background:#dce8ff;color:#0a0d13;font-weight:800}
+#legend{position:fixed;left:16px;bottom:16px;z-index:3;opacity:.8}
+</style></head>
+<body>
+<div id="hud">
+  <div class="card"><b>🪰 FLY REROLL</b></div>
+  <button id="start">START EXPERIMENT</button>
+  <div class="card">trial <b id="trial">0</b></div>
+  <div class="card">presses <b id="presses">0</b></div>
+  <div class="card">reward <b id="reward">0</b></div>
+  <div class="card">brain <span id="status">OFF</span></div>
+</div>
+<div id="legend" class="card">Human only starts/stops the experiment. The fly chooses.</div>
+<pre id="log"></pre>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from "three";
+import {OrbitControls} from "three/addons/controls/OrbitControls.js";
+
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x07090d);
+const cam=new THREE.PerspectiveCamera(48,innerWidth/innerHeight,.1,100); cam.position.set(0,8,13);
+const r=new THREE.WebGLRenderer({antialias:true}); r.setPixelRatio(devicePixelRatio); r.setSize(innerWidth,innerHeight); document.body.appendChild(r.domElement);
+new OrbitControls(cam,r.domElement).target.set(0,0,0);
+scene.add(new THREE.HemisphereLight(0xaab8ff,0x202020,2)); const dl=new THREE.DirectionalLight(0xffffff,3); dl.position.set(3,8,4); scene.add(dl);
+const floor=new THREE.Mesh(new THREE.BoxGeometry(16,.2,10),new THREE.MeshStandardMaterial({color:0x1a2029})); floor.position.y=-.1; scene.add(floor);
+
+function flyMesh(){
+ const g=new THREE.Group();
+ const body=new THREE.Mesh(new THREE.SphereGeometry(.48,12,8),new THREE.MeshStandardMaterial({color:0x28211b,roughness:.8})); body.scale.set(.9,.75,1.5); g.add(body);
+ const head=new THREE.Mesh(new THREE.SphereGeometry(.34,12,8),new THREE.MeshStandardMaterial({color:0x151515})); head.position.z=-.55; g.add(head);
+ for(const s of [-1,1]){const eye=new THREE.Mesh(new THREE.SphereGeometry(.11,8,6),new THREE.MeshBasicMaterial({color:0x7ad7ff}));eye.position.set(.23*s,-.02,-.72);g.add(eye);}
+ for(const s of [-1,1]){const wing=new THREE.Mesh(new THREE.SphereGeometry(.42,12,8),new THREE.MeshPhysicalMaterial({color:0x9fc4d8,transparent:true,opacity:.32,roughness:.1}));wing.scale.set(1.5,.08,.65);wing.position.set(.35*s,.18,.05);wing.rotation.y=s*.35;g.add(wing);}
+ return g;
+}
+const fly=flyMesh(); fly.position.set(-4,.55,0); scene.add(fly);
+const target=new THREE.Mesh(new THREE.BoxGeometry(2,.25,1),new THREE.MeshStandardMaterial({color:0x9b7cff,emissive:0x291c55}));
+target.position.set(3,.14,0); scene.add(target);
+const label=document.createElement("canvas"); label.width=512;label.height=160;const c=label.getContext("2d");c.fillStyle="#0a0a10";c.fillRect(0,0,512,160);c.fillStyle="#fff";c.font="bold 62px system-ui";c.textAlign="center";c.fillText("REROLL",256,105);
+const tex=new THREE.CanvasTexture(label), plate=new THREE.Mesh(new THREE.PlaneGeometry(2.4,.75),new THREE.MeshBasicMaterial({map:tex,transparent:true}));
+plate.position.set(3,.42,0);plate.rotation.x=-Math.PI/2;scene.add(plate);
+
+let running=false, trial=0, presses=0, rewards=0, t0=0, lastMove=0;
+const status=document.querySelector('#status'), logEl=document.querySelector('#log');
+function log(s){logEl.textContent=(new Date().toLocaleTimeString()+" "+s+"\\n"+logEl.textContent).slice(0,5000)}
+function setState(o){if(!o)return; if(o.trial!=null){trial=o.trial;document.querySelector('#trial').textContent=trial} if(o.presses!=null){presses=o.presses;document.querySelector('#presses').textContent=presses} if(o.reward!=null){rewards=o.reward;document.querySelector('#reward').textContent=rewards} status.textContent=o.brain||"CONNECTED";}
+async function post(path,body={}){try{const x=await fetch("http://localhost:8765"+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});return await x.json()}catch(e){return {ok:false,error:"backend offline"}}}
+document.querySelector('#start').onclick=async()=>{
+ running=!running; document.querySelector('#start').textContent=running?"STOP EXPERIMENT":"START EXPERIMENT";
+ const x=await post(running?"/start":"/stop"); setState(x); log(running?"experiment started":"experiment stopped");
+};
+async function loop(){
+ if(running && performance.now()-lastMove>250){
+   lastMove=performance.now();
+   const x=await post("/step",{dt_ms:250});
+   setState(x);
+   if(x.fly && x.fly.x!=null){fly.position.set(x.fly.x,.55,x.fly.z||0)}
+   if(x.event) log(x.event);
+ }
+ requestAnimationFrame(loop);
+}
+addEventListener("resize",()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();r.setSize(innerWidth,innerHeight)});
+function render(){r.render(scene,cam);requestAnimationFrame(render)} render(); loop();
+</script></body></html>
